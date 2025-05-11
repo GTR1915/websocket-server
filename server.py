@@ -1,23 +1,30 @@
 import asyncio
 import websockets
+import os
 
-connected = set()
+clients = set()
 
 async def handler(websocket):
-	connected.add(websocket)
-	client_ip = websocket.remote_address[0]
-	print(f"[+] Client connected: {client_ip}")
 	try:
+		print("New client connected")
+		clients.add(websocket)
 		async for message in websocket:
-			print(f"[{client_ip}] → {message}")
-			# Broadcast to all other clients
-			for conn in connected:
-				if conn != websocket:
-					await conn.send(f"[{client_ip}] {message}")
+			print("Received:", message)
+			for client in clients:
+				if client != websocket:
+					await client.send(message)
 	except websockets.exceptions.ConnectionClosedOK:
-		print(f"[-] Client disconnected normally: {client_ip}")
+		print("Client closed the connection gracefully")
 	except websockets.exceptions.ConnectionClosedError:
-		print(f"[!] Client disconnected abruptly: {client_ip}")
+		print("Client disconnected abruptly (e.g., lost connection)")
 	finally:
-		connected.remove(websocket)
-        
+		clients.remove(websocket)
+		print("Client removed")
+
+async def main():
+	port = int(os.environ.get("PORT", 10000))  # Render sets PORT
+	async with websockets.serve(handler, "0.0.0.0", port):
+		print(f"WebSocket server started on port {port}")
+		await asyncio.Future()
+
+asyncio.run(main())
