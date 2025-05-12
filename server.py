@@ -3,58 +3,48 @@ import websockets
 import os
 import struct
 
-clients = {}       # {websocket: client_id}
-positions = {}     # {client_id: (x, y)}
-
-FORMAT = ">ff"     # Big-endian float, float (2 floats = 8 bytes per client)
+clients = {}      # {websocket: client_id}
+positions = {}    # {client_id: (x, y)}
+client_id_counter = 1
 
 async def handler(websocket):
-	client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+	global client_id_counter
+	client_id = client_id_counter
+	client_id_counter += 1
+
+	clients[websocket] = client_id
+	positions[client_id] = (0.0, 0.0)
+
+	print(f"[+] Client {client_id} connected")
+
 	try:
-		print(f"[+] Client connected: {client_id}", flush=True)
-		clients[websocket] = client_id
-		positions[client_id] = (0.0, 0.0)
-
 		async for message in websocket:
-			if isinstance(message, bytes) and len(message) == 8:
-				try:
-					x, y = struct.unpack(FORMAT, message)
-					positions[client_id] = (x, y)
-					print(f"[POS] {client_id} => x={x:.2f}, y={y:.2f}", flush=True)
-				except Exception as e:
-					print(f"[ERR] Binary decode failed from {client_id}: {e}", flush=True)
-					continue
-			else:
-				print(f"[WARN] Ignored non-binary or malformed message from {client_id}", flush=True)
-				continue
+			if len(message) != 8:
+				continue  # Invalid packet size
 
-			# Build binary update for all clients
-			update = b''.join(struct.pack(FORMAT, x, y) for x, y in positions.values())
+			# Unpack 4-byte float x and y
+			x, y = struct.unpack("ff", message)
+			positions[client_id] = (x, y)
 
-			# Broadcast to all connected clients
+			# Pack the update: 2-byte ID + 4-byte x + 4-byte y = 10 bytes
+			update = struct.pack("Hff", client_id, x, y)
+
 			for client in clients:
 				if client.open:
 					await client.send(update)
 
-	except websockets.exceptions.ConnectionClosedOK:
-		print(f"[✓] Client {client_id} disconnected gracefully", flush=True)
-	except websockets.exceptions.ConnectionClosedError:
-		print(f"[✗] Client {client_id} disconnected abruptly", flush=True)
-	finally:
-		clients.pop(websocket, None)
-		positions.pop(client_id, None)
-		print(f"[-] Client removed: {client_id}", flush=True)
+	except websockets.exceptions.ConnectionClosed:
+		pass
 
-		# Update remaining clients
-		update = b''.join(struct.pack(FORMAT, x, y) for x, y in positions.values())
-		for client in clients:
-			if client.open:
-				await client.send(update)
+	finally:
+		del clients[websocket]
+		del positions[client_id]
+		print(f"[-] Client {client_id} disconnected")
 
 async def main():
 	port = int(os.environ.get("PORT", 10000))
 	async with websockets.serve(handler, "0.0.0.0", port):
-		print(f"[✔] WebSocket server started on port {port}", flush=True)
+		print(f"[✔] WebSocket server started on port {port}")
 		await asyncio.Future()
 
 asyncio.run(main())
