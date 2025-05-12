@@ -20,6 +20,7 @@ async def handler(websocket):
 	try:
 		async for message in websocket:
 			if len(message) != 8:
+        print("Received msg is not of len 8", flush=True)
 				continue  # Invalid packet size
 
 			# Unpack 4-byte float x and y
