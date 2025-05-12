@@ -15,7 +15,7 @@ async def handler(websocket):
 	clients[websocket] = client_id
 	positions[client_id] = (0.0, 0.0)
 
-	print(f"[+] Client {client_id} connected")
+	print(f"[+] Client {client_id} connected", flush=True)
 
 	try:
 		async for message in websocket:
@@ -39,12 +39,12 @@ async def handler(websocket):
 	finally:
 		del clients[websocket]
 		del positions[client_id]
-		print(f"[-] Client {client_id} disconnected")
+		print(f"[-] Client {client_id} disconnected", flush=True)
 
 async def main():
 	port = int(os.environ.get("PORT", 10000))
 	async with websockets.serve(handler, "0.0.0.0", port):
-		print(f"[✔] WebSocket server started on port {port}")
+		print(f"[✔] WebSocket server started on port {port}", flush=True)
 		await asyncio.Future()
 
 asyncio.run(main())
