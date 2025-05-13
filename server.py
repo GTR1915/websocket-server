@@ -17,34 +17,55 @@ async def handler(websocket):
 
 	print(f"[+] Client {client_id} connected", flush=True)
 
-	# Send all existing player positions to the new client
+	# Step 1: Send welcome packet to new client
+	other_players = []
 	for cid, (x, y) in positions.items():
-		if cid == client_id:
-			continue
-		initial_packet = struct.pack("<BBff", 0, cid, x, y)  # type=0, id, x, y
-		await websocket.send(initial_packet)
+		if cid != client_id:
+			other_players.append((cid, x, y))
 
+	player_count = len(other_players)
+
+	# Start building welcome packet (type=2, assigned_id, count)
+	welcome_packet = struct.pack("<BBB", 2, client_id, player_count)
+
+	# Add each existing player's info to the packet
+	for cid, x, y in other_players:
+		player_data = struct.pack("<Bff", cid, x, y)
+		welcome_packet += player_data
+
+	# Send complete welcome packet to the new client
+	await websocket.send(welcome_packet)
+
+	# Step 2: Notify all other clients that a new player has joined
+	join_packet = struct.pack("<BBff", 0, client_id, 0.0, 0.0)  # type=0, new_id, x, y
+
+	for client_ws in clients:
+		if client_ws != websocket and client_ws.open:
+			await client_ws.send(join_packet)
+
+	# Step 3: Start receiving updates from the client
 	try:
 		async for message in websocket:
 			if len(message) != 8:
 				print("Received msg is not of len 8", flush=True)
-				continue  # Invalid packet size
+				continue
 
-			# Unpack 4-byte float x and y
+			# Extract new coordinates
 			x, y = struct.unpack("ff", message)
 
-			# Calculate delta
+			# Compute delta from old position
 			old_x, old_y = positions[client_id]
 			dx = int((x - old_x) * 100)
 			dy = int((y - old_y) * 100)
 			positions[client_id] = (x, y)
 
-			# Pack delta update: 1-byte type + 1-byte ID + 2-byte dx + 2-byte dy = 6 bytes
-			update = struct.pack("<BBhh", 1, client_id, dx, dy)
+			# Pack delta update (type=1, id, dx, dy)
+			update_packet = struct.pack("<BBhh", 1, client_id, dx, dy)
 
-			for client in clients:
-				if client.open:
-					await client.send(update)
+			# Broadcast to all connected clients
+			for client_ws in clients:
+				if client_ws.open:
+					await client_ws.send(update_packet)
 
 	except websockets.exceptions.ConnectionClosed:
 		pass
