@@ -17,6 +17,13 @@ async def handler(websocket):
 
 	print(f"[+] Client {client_id} connected", flush=True)
 
+	# Send all existing player positions to the new client
+	for cid, (x, y) in positions.items():
+		if cid == client_id:
+			continue
+		initial_packet = struct.pack("<BBff", 0, cid, x, y)  # type=0, id, x, y
+		await websocket.send(initial_packet)
+
 	try:
 		async for message in websocket:
 			if len(message) != 8:
@@ -25,10 +32,15 @@ async def handler(websocket):
 
 			# Unpack 4-byte float x and y
 			x, y = struct.unpack("ff", message)
+
+			# Calculate delta
+			old_x, old_y = positions[client_id]
+			dx = int((x - old_x) * 100)
+			dy = int((y - old_y) * 100)
 			positions[client_id] = (x, y)
 
-			# Pack the update: 1-byte ID + 4-byte x + 4-byte y = 10 bytes
-			update = struct.pack("<Bff", client_id, x, y)
+			# Pack delta update: 1-byte type + 1-byte ID + 2-byte dx + 2-byte dy = 6 bytes
+			update = struct.pack("<BBhh", 1, client_id, dx, dy)
 
 			for client in clients:
 				if client.open:
