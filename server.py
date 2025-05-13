@@ -27,8 +27,8 @@ async def handler(websocket):
 			x, y = struct.unpack("ff", message)
 			positions[client_id] = (x, y)
 
-			# Pack the update: 2-byte ID + 4-byte x + 4-byte y = 10 bytes
-			update = struct.pack("Hff", client_id, x, y)
+			# Pack the update: 1-byte ID + 4-byte x + 4-byte y = 10 bytes
+			update = struct.pack("<Bff", client_id, x, y)
 
 			for client in clients:
 				if client.open:
