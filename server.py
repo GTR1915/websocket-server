@@ -2,17 +2,23 @@ import asyncio
 import websockets
 import os
 import struct
+import time
 
 '''
-type 0 message informs that a new player has joined, format BBii (10 bytes)
-type 1 message is the update message of one client for others, format BBhh (6 bytes)
-type 2 message is the welcome for the newly joined player containing info of current number of active (open connections) players and their pos. Format is BBB+Bii+Bii+Bii...... (3+9+9+9..... bytes)
+Message Format Definitions:
+- Type 0: New player joined. Format = BBii (10 bytes)
+- Type 1: Delta update. Format = B + Bhh + Bhh + ... (5n+2 bytes)
+- Type 2: Welcome message for new joiner. Format = BBB + Bii + Bii + ...
+- Type 3: Full-state sync (periodic). Format = BB + Bii + Bii + ...
 '''
 
-clients = {}      # {websocket: client_id}
-positions = {}    # {client_id: (x, y)}
+clients = {}       # {websocket: client_id}
+positions = {}     # {client_id: (x, y)}
 client_id_counter = 1
+TICK_RATE = 0.04   # 40 ms per tick
+FULL_SYNC_INTERVAL = 2.0  # seconds
 
+# Handle each connected client
 async def handler(websocket):
 	global client_id_counter
 	client_id = client_id_counter
@@ -23,72 +29,83 @@ async def handler(websocket):
 
 	print(f"[+] Client {client_id} connected", flush=True)
 
-	# Step 1: Send welcome packet to new client
-	other_players = []
-	for cid, (x, y) in positions.items():
-		if cid != client_id:
-			other_players.append((cid, x, y))
-
-	player_count = len(other_players)
-
-	# Start building welcome packet (type=2, assigned_id, count)
-	welcome_packet = struct.pack("<BBB", 2, client_id, player_count)
-
-	# Add each existing player's info to the packet
+	# Prepare and send welcome packet (type 2)
+	other_players = [(cid, x, y) for cid, (x, y) in positions.items() if cid != client_id]
+	welcome_packet = struct.pack("<BBB", 2, client_id, len(other_players))
 	for cid, x, y in other_players:
-		player_data = struct.pack("<Bii", cid, x, y)
-		welcome_packet += player_data
-
-	# Send complete welcome packet to the new client
+		welcome_packet += struct.pack("<Bii", cid, x, y)
 	await websocket.send(welcome_packet)
 
-	# Step 2: Notify all other clients that a new player has joined
-	join_packet = struct.pack("<BBii", 0, client_id, 0, 0)  # type=0, new_id, x, y
+	# Notify others about this new player (type 0)
+	join_packet = struct.pack("<BBii", 0, client_id, 0, 0)
+	for ws in clients:
+		if ws != websocket and ws.open:
+			await ws.send(join_packet)
 
-	for client_ws in clients:
-		if client_ws != websocket and client_ws.open:
-			await client_ws.send(join_packet)
-
-	# Step 3: Start receiving updates from the client
 	try:
+		# Listen to this client for position updates
 		async for message in websocket:
 			if len(message) != 8:
-				print("Received msg is not of len 8", flush=True)
+				print("[WARN] Invalid message length:", len(message))
 				continue
 
-			# Extract new coordinates
 			try:
 				x, y = struct.unpack("ii", message)
-			except struct.error:
-				print("[ERR] Bad data received:", message)
+			except:
+				print("[ERR] Malformed data from", client_id)
 				continue
 
-			# Compute delta from old position
+			# Update position and store delta
 			old_x, old_y = positions[client_id]
-			dx = x - old_x
-			dy = y - old_y
+			dx, dy = x - old_x, y - old_y
 			positions[client_id] = (x, y)
-
-			# Pack delta update (type=1, id, dx, dy)
-			update_packet = struct.pack("<BBhh", 1, client_id, dx, dy)
-
-			# Broadcast to all connected clients
-			for client_ws in clients:
-				if client_ws.open:
-					await client_ws.send(update_packet)
 
 	except websockets.exceptions.ConnectionClosed:
 		pass
-
 	finally:
+		# Cleanup on disconnect
+		print(f"[-] Client {client_id} disconnected", flush=True)
 		del clients[websocket]
 		del positions[client_id]
-		print(f"[-] Client {client_id} disconnected", flush=True)
 
+# Broadcast loop: send delta updates every tick, and full-state sync every 2s
+async def broadcast_loop():
+	last_sync_time = time.time()
+	last_positions = positions.copy()
+
+	while True:
+		await asyncio.sleep(TICK_RATE)
+		delta_packet = struct.pack("<B", 1)
+
+		# Create delta packets (type 1) for all clients
+		for cid, (x, y) in positions.items():
+			old_x, old_y = last_positions.get(cid, (x, y))
+			dx, dy = x - old_x, y - old_y
+			if dx != 0 or dy != 0:
+				delta_packet += struct.pack("<Bhh", cid, dx, dy)
+				last_positions[cid] = (x, y)
+
+		# Send delta updates to all clients
+		for ws in clients:
+			if ws.open:
+				await ws.send(delta_packet)
+
+		# Send full state sync every 2 seconds, msg type 3
+		if time.time() - last_sync_time >= FULL_SYNC_INTERVAL:
+			sync_packet = struct.pack("<BB", 3, len(positions))
+			for cid, (x, y) in positions.items():
+				sync_packet += struct.pack("<Bii", cid, x, y)
+			for ws in clients:
+				if ws.open:
+					await ws.send(sync_packet)
+			last_sync_time = time.time()
+			print("[SYNC] Full-state sync sent")
+
+# Main server entry
 async def main():
 	port = int(os.environ.get("PORT", 10000))
 	async with websockets.serve(handler, "0.0.0.0", port):
 		print(f"[✔] WebSocket server started on port {port}", flush=True)
-		await asyncio.Future()
+		await broadcast_loop()
 
 asyncio.run(main())
