@@ -98,7 +98,7 @@ async def broadcast_loop():
 				old_x, old_y = last_positions[cid]
 			except KeyError:
 				last_positions[cid] = (x, y)
-				delta_packet += struct.pack("<Bhh", cid, dx, dy)
+				delta_packet += struct.pack("<Bhh", cid, x, y)
 				old_x, old_y = positions[cid]
 			
 			dx, dy = x - old_x, y - old_y
